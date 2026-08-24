@@ -137,7 +137,11 @@ If the binary was not tampered with the output will say `cargo-cost-lint: OK`.
 | `--format <text\|json>` | Output format (default: `text`) |
 | `--list-lints` | Print every registered lint with its default level and one-line description, then exit |
 | `--explain <LINT>` | Print the full documentation for a specific lint (what it does, why it's expensive, suggested fix) and exit |
+| `--quiet` | Suppress informational and warning output (lint findings and errors are never suppressed) |
+| `--verbose` | Show diagnostic detail: resolved config path, lint flags, and the spawned command |
 | `--version` | Print the crate version and exit |
+
+`--quiet` and `--verbose` are mutually exclusive. In JSON mode (`--format json`), both flags keep stdout as clean NDJSON; all diagnostic output goes to stderr.
 
 ### Running the linter
 
