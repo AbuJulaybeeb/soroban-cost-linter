@@ -1648,8 +1648,11 @@ mod tests {
         assert_eq!(cli.color, ColorChoice::Never);
     }
 
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn resolve_color_explicit_always_overrides_no_color() {
+        let _guard = ENV_LOCK.lock().unwrap();
         unsafe { std::env::set_var("NO_COLOR", "1") };
         let resolved = resolve_color_choice(&ColorChoice::Always);
         assert_eq!(resolved, ColorChoice::Always);
@@ -1658,6 +1661,7 @@ mod tests {
 
     #[test]
     fn resolve_color_explicit_never_overrides_no_color() {
+        let _guard = ENV_LOCK.lock().unwrap();
         unsafe { std::env::set_var("NO_COLOR", "1") };
         let resolved = resolve_color_choice(&ColorChoice::Never);
         assert_eq!(resolved, ColorChoice::Never);
@@ -1666,6 +1670,7 @@ mod tests {
 
     #[test]
     fn resolve_color_auto_no_color_set_resolves_to_never() {
+        let _guard = ENV_LOCK.lock().unwrap();
         unsafe { std::env::set_var("NO_COLOR", "1") };
         let resolved = resolve_color_choice(&ColorChoice::Auto);
         assert_eq!(resolved, ColorChoice::Never);
@@ -1674,6 +1679,7 @@ mod tests {
 
     #[test]
     fn resolve_color_auto_no_color_empty_resolves_to_auto() {
+        let _guard = ENV_LOCK.lock().unwrap();
         unsafe { std::env::set_var("NO_COLOR", "") };
         let resolved = resolve_color_choice(&ColorChoice::Auto);
         assert_eq!(resolved, ColorChoice::Auto);
