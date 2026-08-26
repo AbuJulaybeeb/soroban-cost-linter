@@ -303,6 +303,20 @@ We are actively looking for contributors in cost-model research, AST parsing, an
 See [CONTRIBUTING.md](CONTRIBUTING.md) for more detailed guidelines.
 **Windows contributors**, start with [docs/windows_setup.md](docs/windows_setup.md) for WSL2 and native-PowerShell setup instructions.
 
+### Performance Benchmarking & Regression Gate
+
+The performance benchmark suite measures linter execution duration across all corpus contracts:
+
+```bash
+# Run the benchmark and compare against the recorded baseline
+cargo bench --bench linter_performance --package cargo-cost-lint
+
+# Deliberately update/bless the baseline when a performance slowdown is accepted
+BLESS_BENCH=1 cargo bench --bench linter_performance --package cargo-cost-lint
+```
+
+The CI pipeline runs this gate automatically. Regressions exceeding the 25% threshold fail the build.
+
 Release history is documented in [CHANGELOG.md](CHANGELOG.md).
 
 ## Community
