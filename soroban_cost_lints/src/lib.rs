@@ -110,6 +110,7 @@ pub fn register_lints(sess: &rustc_session::Session, lint_store: &mut LintStore)
     lint_store.register_late_pass(|_| Box::new(InefficientBytesConcat));
     lint_store.register_late_pass(|_| Box::new(UnnecessaryStringToBytes));
     lint_store.register_late_pass(|_| Box::new(BytesAppendInLoop));
+    lint_store.register_late_pass(|_| Box::new(StringConcatInLoop));
     lint_store.register_late_pass(|_| Box::new(StorageWriteWithoutRead));
     lint_store.register_late_pass(|_| Box::new(StorageKeyConstructionInLoop));
     lint_store.register_late_pass(|_| Box::new(MapInsertInLoop));
@@ -701,10 +702,6 @@ dylint_lint_impl! {
 // Lint pass implementations restored from before 3e70958.
 // ---------------------------------------------------------------------------
 
-
-
-
-
 // ---------------------------------------------------------------------------
 // Per-DefId cache of `def_path_str` so that the expensive full-path
 // formatting happens at most once per unique DefId instead of for every
@@ -714,7 +711,6 @@ dylint_lint_impl! {
 thread_local! {
     static DEF_PATH_CACHE: RefCell<HashMap<DefId, String>> = RefCell::new(HashMap::new());
 }
-
 
 fn cached_def_path_str(tcx: TyCtxt<'_>, def_id: DefId) -> String {
     DEF_PATH_CACHE.with(|cache| {
@@ -726,7 +722,6 @@ fn cached_def_path_str(tcx: TyCtxt<'_>, def_id: DefId) -> String {
     })
 }
 
-
 /// Compares `def_id` against the canonical definition path `segments`.
 /// The hot `def_path_str` call is cached per `DefId` so repeated checks on
 /// the same type (e.g. `Env`, `Bytes`) avoid re-formatting the full path.
@@ -735,7 +730,6 @@ fn match_soroban_def_path(cx: &LateContext<'_>, def_id: DefId, segments: &[&str]
     let suffix: String = segments.join("::");
     full.ends_with(&suffix)
 }
-
 
 /// Returns whether `expr_ty` is one of the requested Soroban ADT types.
 ///
@@ -757,14 +751,12 @@ fn is_type_match<'tcx>(
     }
 }
 
-
 const SOROBAN_STORAGE_TYPES: &[&[&str]] = &[
     &["soroban_sdk", "storage", "Storage"],
     &["soroban_sdk", "storage", "Instance"],
     &["soroban_sdk", "storage", "Persistent"],
     &["soroban_sdk", "storage", "Temporary"],
 ];
-
 
 const SOROBAN_HOST_TYPES: &[&[&str]] = &[
     &["soroban_sdk", "ledger", "Ledger"],
@@ -779,16 +771,13 @@ const SOROBAN_HOST_TYPES: &[&[&str]] = &[
     &["soroban_sdk", "deploy", "DeployerWithAsset"],
 ];
 
-
 /// Soroban collection types that support linear-time scanning operations.
 const SOROBAN_COLLECTION_TYPES: &[&[&str]] = &[
     &["soroban_sdk", "vec", "Vec"],
     &["soroban_sdk", "map", "Map"],
 ];
 
-
 const LINEAR_SCAN_METHODS: &[&str] = &["contains", "position", "find"];
-
 
 /// Host calls that live directly on `Env` rather than on an accessor type, and
 /// whose result is constant for the whole invocation.
@@ -800,7 +789,6 @@ const LINEAR_SCAN_METHODS: &[&str] = &["contains", "position", "find"];
 /// because their cost is inherent to what the loop is doing.
 const SOROBAN_ENV_HOST_METHODS: &[&str] = &["current_contract_address"];
 
-
 /// Soroban SDK container types. Growth-method calls (append, push_back, insert,
 /// extend_from_array) on these inside a loop reallocate host-side state on
 /// every iteration.
@@ -810,11 +798,13 @@ const SOROBAN_CONTAINER_TYPES: &[&[&str]] = &[
     &["soroban_sdk", "Map"],
 ];
 
-
 /// Methods on [`SOROBAN_CONTAINER_TYPES`] that grow the container's backing
 /// buffer, causing increasingly expensive host-side work per call.
 const BYTES_APPEND_METHODS: &[&str] = &["append", "push_back", "insert", "extend_from_array"];
 
+/// Methods on `soroban_sdk::String` that concatenate, allocating a fresh
+/// buffer and copying on every call.
+const STRING_CONCAT_METHODS: &[&str] = &["append"];
 
 fn matches_any_path<'tcx>(cx: &LateContext<'tcx>, def_id: DefId, paths: &[&[&str]]) -> bool {
     paths
@@ -822,13 +812,11 @@ fn matches_any_path<'tcx>(cx: &LateContext<'tcx>, def_id: DefId, paths: &[&[&str
         .any(|segments| match_soroban_def_path(cx, def_id, segments))
 }
 
-
 fn match_soroban_def_path_tcx(tcx: TyCtxt<'_>, def_id: DefId, segments: &[&str]) -> bool {
     let full = tcx.def_path_str(def_id);
     let suffix: String = segments.join("::");
     full.ends_with(&suffix)
 }
-
 
 fn matches_any_path_tcx(tcx: TyCtxt<'_>, def_id: DefId, paths: &[&[&str]]) -> bool {
     paths
@@ -836,12 +824,10 @@ fn matches_any_path_tcx(tcx: TyCtxt<'_>, def_id: DefId, paths: &[&[&str]]) -> bo
         .any(|segments| match_soroban_def_path_tcx(tcx, def_id, segments))
 }
 
-
 /// Maximum call depth for inter-procedural analysis. Functions reachable
 /// beyond this depth are not inspected; the analysis conservatively treats
 /// them as not containing the target operation.
 const MAX_CALL_DEPTH: u32 = 3;
-
 
 /// Whether `def_id` (or a callee up to `depth_remaining` deep) performs a
 /// Soroban storage/host operation matching `target_paths`.
@@ -901,7 +887,6 @@ fn callee_contains_soroban_op<'tcx>(
     found
 }
 
-
 /// Visitor that walks a callee body looking for direct storage/host method
 /// calls or nested calls that transitively reach one.
 struct CalleeStorageDetector<'a, 'tcx> {
@@ -912,7 +897,6 @@ struct CalleeStorageDetector<'a, 'tcx> {
     visited: &'a mut Vec<DefId>,
     found: bool,
 }
-
 
 impl<'a, 'tcx> Visitor<'tcx> for CalleeStorageDetector<'a, 'tcx> {
     /// Visits an expression, flagging method calls on storage/host types and
@@ -961,14 +945,12 @@ impl<'a, 'tcx> Visitor<'tcx> for CalleeStorageDetector<'a, 'tcx> {
     }
 }
 
-
 /// Collects the `HirId`s of every binding introduced inside the visited
 /// subtree, e.g. the loop variable of a `for` loop or a per-iteration `let`.
 #[derive(Default)]
 struct BindingCollector {
     bindings: HirIdSet,
 }
-
 
 impl<'tcx> Visitor<'tcx> for BindingCollector {
     /// Records the `HirId` of any binding pattern encountered, then recurses
@@ -981,13 +963,11 @@ impl<'tcx> Visitor<'tcx> for BindingCollector {
     }
 }
 
-
 /// Collects the `HirId`s of every local read in the visited subtree.
 #[derive(Default)]
 struct LocalReadCollector {
     reads: HirIdSet,
 }
-
 
 impl<'tcx> Visitor<'tcx> for LocalReadCollector {
     /// Records the `HirId` of every resolved read of a local variable, i.e. a
@@ -1002,7 +982,6 @@ impl<'tcx> Visitor<'tcx> for LocalReadCollector {
         intravisit::walk_expr(self, expr);
     }
 }
-
 
 /// Whether `call` — receiver chain and arguments included — reads anything that
 /// changes from iteration to iteration of `loop_expr`.
@@ -1068,7 +1047,6 @@ fn depends_on_loop_state<'tcx>(
             .any(|hir_id| bound.bindings.contains(hir_id) || mutated.contains(hir_id))
 }
 
-
 /// Whether `expr` sits directly inside a loop body, returning that loop.
 ///
 /// A call inside a closure that the loop calls is not reported: the closure may
@@ -1082,7 +1060,6 @@ fn enclosing_loop<'tcx>(
     matches!(enclosing.kind, hir::ExprKind::Loop(..)).then_some(enclosing)
 }
 
-
 fn enclosing_loop_or_closure<'tcx>(
     cx: &LateContext<'tcx>,
     expr: &'tcx hir::Expr<'tcx>,
@@ -1095,16 +1072,13 @@ fn enclosing_loop_or_closure<'tcx>(
     .then_some(enclosing)
 }
 
-
 /// High-level cost category a lint belongs to. Surfaced by `cargo-cost-lint`
 /// to group warnings in the `--report` output and to label `budget.toml`
 /// rows under their category.
-
 /// Concrete pass that fires [`SOROBAN_STORAGE_IN_LOOP`].
 pub struct SorobanStorageInLoop;
 
 rustc_session::impl_lint_pass!(SorobanStorageInLoop => [SOROBAN_STORAGE_IN_LOOP]);
-
 
 /// Detection: for every `expr.kind == MethodCall`, peel references off the
 /// receiver's type and look for one of [`SOROBAN_STORAGE_TYPES`], or for
@@ -1191,7 +1165,6 @@ pub struct LoopInvariantStorageAccess;
 
 rustc_session::impl_lint_pass!(LoopInvariantStorageAccess => [LOOP_INVARIANT_STORAGE_ACCESS]);
 
-
 impl<'tcx> LateLintPass<'tcx> for LoopInvariantStorageAccess {
     /// Flags a storage method call inside a loop when none of its operands
     /// depend on per-iteration state (loop variables, mutated bindings).
@@ -1235,7 +1208,6 @@ pub struct SorobanInefficientBytesConcat;
 
 rustc_session::impl_lint_pass!(SorobanInefficientBytesConcat => [SOROBAN_INEFFICIENT_BYTES_CONCAT]);
 
-
 impl<'tcx> LateLintPass<'tcx> for SorobanInefficientBytesConcat {
     fn check_expr(&mut self, cx: &LateContext<'tcx>, expr: &'tcx hir::Expr<'tcx>) {
         if let hir::ExprKind::MethodCall(path_segment, receiver, _args, _span) = expr.kind {
@@ -1276,7 +1248,6 @@ impl<'tcx> LateLintPass<'tcx> for SorobanInefficientBytesConcat {
 pub struct SorobanRedundantStorageRead;
 
 rustc_session::impl_lint_pass!(SorobanRedundantStorageRead => [SOROBAN_REDUNDANT_STORAGE_READ]);
-
 
 impl SorobanRedundantStorageRead {
     fn is_storage_type<'tcx>(
@@ -1333,7 +1304,6 @@ impl SorobanRedundantStorageRead {
     }
 }
 
-
 enum StorageOp {
     Read {
         storage_def_id: DefId,
@@ -1341,7 +1311,6 @@ enum StorageOp {
     },
     Write,
 }
-
 
 impl<'tcx> LateLintPass<'tcx> for SorobanRedundantStorageRead {
     fn check_block(&mut self, cx: &LateContext<'tcx>, block: &'tcx hir::Block<'tcx>) {
@@ -1395,7 +1364,6 @@ impl<'tcx> LateLintPass<'tcx> for SorobanRedundantStorageRead {
 pub struct RedundantEnvClone;
 
 rustc_session::impl_lint_pass!(RedundantEnvClone => [REDUNDANT_ENV_CLONE]);
-
 
 /// Detection: for every `MethodCall` whose segment is named `clone`, peel
 /// references off the receiver and check whether the underlying ADT
@@ -1463,7 +1431,6 @@ pub struct HostInLoop;
 
 rustc_session::impl_lint_pass!(HostInLoop => [HOST_IN_LOOP]);
 
-
 /// Detection: for every `MethodCall`, peel the receiver's reference
 /// layers. The call is reported iff:
 ///
@@ -1512,7 +1479,6 @@ impl<'tcx> LateLintPass<'tcx> for UnnecessaryHostFunctionCall {
     }
 }
 
-
 /// Detection: for every `MethodCall`, peel references off the receiver
 /// and check whether the underlying ADT resolves to `host::Host`. A match
 /// is reported only when [`enclosing_loop`] returns `Some`. The check is
@@ -1553,7 +1519,6 @@ pub struct UnnecessaryStringToBytes;
 
 rustc_session::impl_lint_pass!(UnnecessaryStringToBytes => [UNNECESSARY_STRING_TO_BYTES]);
 
-
 impl<'tcx> LateLintPass<'tcx> for UnnecessaryStringToBytes {
     /// Flags `.to_bytes()` calls on `soroban_sdk::String` values.
     ///
@@ -1592,7 +1557,6 @@ pub struct ContractCallInLoop;
 
 rustc_session::impl_lint_pass!(ContractCallInLoop => [CONTRACT_CALL_IN_LOOP]);
 
-
 impl<'tcx> LateLintPass<'tcx> for ContractCallInLoop {
     fn check_expr(&mut self, cx: &LateContext<'tcx>, expr: &'tcx hir::Expr<'tcx>) {
         if let hir::ExprKind::MethodCall(path_segment, receiver, _args, _span) = expr.kind
@@ -1625,7 +1589,6 @@ impl<'tcx> LateLintPass<'tcx> for ContractCallInLoop {
 pub struct SymbolNewForShortLiteral;
 
 rustc_session::impl_lint_pass!(SymbolNewForShortLiteral => [SYMBOL_NEW_FOR_SHORT_LITERAL]);
-
 
 /// Detection: find every `Call` whose callee resolves to
 /// `soroban_sdk::Symbol::new` and whose second argument is a string
@@ -1685,7 +1648,6 @@ impl<'tcx> LateLintPass<'tcx> for SymbolNewForShortLiteral {
     }
 }
 
-
 /// Late pass backing [`UNBOUNDED_INPUT_LOOP`].
 ///
 /// Flags loops whose iteration count is derived from a function parameter
@@ -1698,13 +1660,11 @@ pub struct UnboundedInputLoop;
 
 rustc_session::impl_lint_pass!(UnboundedInputLoop => [UNBOUNDED_INPUT_LOOP]);
 
-
 /// Collects the `HirId` of every function parameter pattern.
 #[derive(Default)]
 struct ParamHirIdCollector {
     params: HirIdSet,
 }
-
 
 impl<'tcx> Visitor<'tcx> for ParamHirIdCollector {
     /// Records the `HirId` of every binding pattern encountered, recursing
@@ -1716,7 +1676,6 @@ impl<'tcx> Visitor<'tcx> for ParamHirIdCollector {
         intravisit::walk_pat(self, pat);
     }
 }
-
 
 impl<'tcx> LateLintPass<'tcx> for UnboundedInputLoop {
     /// Visits each named function, collecting parameter `HirId`s and walking
@@ -1756,7 +1715,6 @@ impl<'tcx> LateLintPass<'tcx> for UnboundedInputLoop {
     }
 }
 
-
 /// Walker that traverses a function body to find loops with parameter-derived
 /// bounds that contain storage writes.
 struct UnboundedLoopWalker<'a, 'tcx> {
@@ -1766,7 +1724,6 @@ struct UnboundedLoopWalker<'a, 'tcx> {
     current_loop: Option<(hir::HirId, bool)>,
     flagged: HirIdSet,
 }
-
 
 impl<'a, 'tcx> Visitor<'tcx> for UnboundedLoopWalker<'a, 'tcx> {
     fn visit_expr(&mut self, expr: &'tcx hir::Expr<'tcx>) {
@@ -1849,7 +1806,6 @@ impl<'a, 'tcx> Visitor<'tcx> for UnboundedLoopWalker<'a, 'tcx> {
     }
 }
 
-
 impl<'a, 'tcx> UnboundedLoopWalker<'a, 'tcx> {
     /// Walks the block's preceding statements (the iterator init in a
     /// desugared `for`/`while` loop) and returns `true` if any expression
@@ -1902,6 +1858,78 @@ pub struct BytesAppendInLoop;
 
 rustc_session::impl_lint_pass!(BytesAppendInLoop => [BYTES_APPEND_IN_LOOP]);
 
+/// Concrete pass that fires [`STRING_CONCAT_IN_LOOP`].
+pub struct StringConcatInLoop;
+rustc_session::impl_lint_pass!(StringConcatInLoop => [STRING_CONCAT_IN_LOOP]);
+
+/// Whether `ty` resolves to `soroban_sdk::String` (references peeled).
+fn is_string_type<'tcx>(cx: &LateContext<'tcx>, ty: rustc_middle::ty::Ty<'tcx>) -> bool {
+    let peeled = ty.peel_refs();
+    if let Some(adt_def) = ty_adt_def(peeled) {
+        match_soroban_def_path(cx, adt_def.did(), &["soroban_sdk", "String"])
+    } else {
+        false
+    }
+}
+
+/// Detection: for every `MethodCall` whose segment is in
+/// [`STRING_CONCAT_METHODS`], peel references off the receiver and confirm the
+/// ADT is `soroban_sdk::String`.  A match is reported only when
+/// [`enclosing_loop`] returns `Some`.  We also catch `String + String`
+/// (`Add`) binary expressions inside a loop, since they perform the same
+/// host-side copy.  As with [`BYTES_APPEND_IN_LOOP`] we deliberately do
+/// **not** attempt to detect whether the loop could be batched — that
+/// reasoning is runtime-dependent and would inflate the false-positive rate.
+impl<'tcx> LateLintPass<'tcx> for StringConcatInLoop {
+    /// Flags a concatenation on a `soroban_sdk::String` inside a loop.
+    ///
+    /// Matching is done two ways: a method call named `append` whose receiver
+    /// is a `soroban_sdk::String`, and a `String + String` binary `Add` whose
+    /// either operand is a `soroban_sdk::String`.  Only syntactic loops are
+    /// considered; multi-call closures are not flagged here.
+    fn check_expr(&mut self, cx: &LateContext<'tcx>, expr: &'tcx hir::Expr<'tcx>) {
+        // `append` method on a `String` receiver inside a loop.
+        if let hir::ExprKind::MethodCall(path_segment, receiver, _args, _span) = expr.kind {
+            let method_name = path_segment.ident.name.as_str();
+            if STRING_CONCAT_METHODS.contains(&method_name)
+                && is_string_type(cx, cx.typeck_results().expr_ty(receiver))
+                && enclosing_loop(cx, expr).is_some()
+            {
+                span_lint_and_help(
+                    cx,
+                    STRING_CONCAT_IN_LOOP,
+                    expr.span,
+                    "repeatedly concatenating a soroban String inside a loop",
+                    None,
+                    "collect the pieces in a native collection (e.g. `Vec<String>` or byte \
+                     slices) inside the loop and construct the `String` a single time \
+                     afterwards; pre-size where practical",
+                );
+                return;
+            }
+        }
+
+        // `String + String` (Add) inside a loop.
+        if let hir::ExprKind::Binary(op, lhs, rhs) = &expr.kind
+            && matches!(op.node, hir::BinOpKind::Add)
+        {
+            let is_string = is_string_type(cx, cx.typeck_results().expr_ty(lhs))
+                || is_string_type(cx, cx.typeck_results().expr_ty(rhs));
+            if is_string && enclosing_loop(cx, expr).is_some() {
+                span_lint_and_help(
+                    cx,
+                    STRING_CONCAT_IN_LOOP,
+                    expr.span,
+                    "repeatedly concatenating a soroban String inside a loop",
+                    None,
+                    "collect the pieces in a native collection (e.g. `Vec<String>` or byte \
+                     slices) inside the loop and construct the `String` a single time \
+                     afterwards; pre-size where practical",
+                );
+            }
+        }
+    }
+}
 
 /// Detection: for every `MethodCall` whose segment is one of
 /// [`BYTES_APPEND_METHODS`], peel references off the receiver and confirm
@@ -1946,7 +1974,6 @@ impl<'tcx> LateLintPass<'tcx> for BytesAppendInLoop {
     }
 }
 
-
 /// Check if a string is a valid short symbol (<= 9 chars, only a-zA-Z0-9_)
 fn is_valid_short_symbol(symbol_str: &str) -> bool {
     if symbol_str.len() > 9 || symbol_str.is_empty() {
@@ -1966,7 +1993,6 @@ fn is_valid_short_symbol(symbol_str: &str) -> bool {
 pub struct StorageWriteWithoutRead;
 
 rustc_session::impl_lint_pass!(StorageWriteWithoutRead => [STORAGE_WRITE_WITHOUT_READ]);
-
 
 impl<'tcx> LateLintPass<'tcx> for StorageWriteWithoutRead {
     /// Visits a function body, collecting all storage reads and writes, and
@@ -2093,7 +2119,6 @@ pub struct InefficientBytesConcat;
 
 rustc_session::impl_lint_pass!(InefficientBytesConcat => [INEFFICIENT_BYTES_CONCAT]);
 
-
 impl<'tcx> LateLintPass<'tcx> for InefficientBytesConcat {
     /// Visits binary `+` expressions and checks whether at least one
     /// operand is a `soroban_sdk::Bytes` type and the expression sits
@@ -2120,7 +2145,6 @@ impl<'tcx> LateLintPass<'tcx> for InefficientBytesConcat {
     }
 }
 
-
 fn is_bytes_type<'tcx>(cx: &LateContext<'tcx>, ty: rustc_middle::ty::Ty<'tcx>) -> bool {
     let peeled = ty.peel_refs();
     if let Some(adt_def) = ty_adt_def(peeled) {
@@ -2130,7 +2154,6 @@ fn is_bytes_type<'tcx>(cx: &LateContext<'tcx>, ty: rustc_middle::ty::Ty<'tcx>) -
         false
     }
 }
-
 
 /// Extracts the `AdtDef` from a `Ty`, without peeling references.
 fn ty_adt_def<'tcx>(ty: rustc_middle::ty::Ty<'tcx>) -> Option<rustc_middle::ty::AdtDef<'tcx>> {
@@ -2150,7 +2173,6 @@ fn ty_adt_def<'tcx>(ty: rustc_middle::ty::Ty<'tcx>) -> Option<rustc_middle::ty::
 pub struct MapInsertInLoop;
 
 rustc_session::impl_lint_pass!(MapInsertInLoop => [MAP_INSERT_IN_LOOP]);
-
 
 impl<'tcx> LateLintPass<'tcx> for MapInsertInLoop {
     /// Flags a `.insert()` method call whose receiver is a
@@ -2183,7 +2205,6 @@ impl<'tcx> LateLintPass<'tcx> for MapInsertInLoop {
     }
 }
 
-
 // =======================================================================
 // signature_verification_in_loop — Lint
 // =======================================================================
@@ -2209,7 +2230,6 @@ const SIGNATURE_VERIFICATION_METHODS: &[&str] =
 pub struct SignatureVerificationInLoop;
 
 rustc_session::impl_lint_pass!(SignatureVerificationInLoop => [SIGNATURE_VERIFICATION_IN_LOOP]);
-
 
 impl<'tcx> LateLintPass<'tcx> for SignatureVerificationInLoop {
     /// Flags a method call matching [`SIGNATURE_VERIFICATION_METHODS`] on a
@@ -2246,7 +2266,6 @@ impl<'tcx> LateLintPass<'tcx> for SignatureVerificationInLoop {
     }
 }
 
-
 // =======================================================================
 // crypto_hash_of_constant — Lint
 // =======================================================================
@@ -2270,7 +2289,6 @@ const CRYPTO_HASH_METHODS: &[&str] = &["sha256", "keccak256"];
 pub struct CryptoHashOfConstant;
 
 rustc_session::impl_lint_pass!(CryptoHashOfConstant => [CRYPTO_HASH_OF_CONSTANT]);
-
 
 impl<'tcx> LateLintPass<'tcx> for CryptoHashOfConstant {
     /// Flags a hash call on a `soroban_sdk::crypto::Crypto` receiver when its
@@ -2316,7 +2334,6 @@ impl<'tcx> LateLintPass<'tcx> for CryptoHashOfConstant {
 pub struct StorageKeyConstructionInLoop;
 
 rustc_session::impl_lint_pass!(StorageKeyConstructionInLoop => [STORAGE_KEY_CONSTRUCTION_IN_LOOP]);
-
 
 impl<'tcx> LateLintPass<'tcx> for StorageKeyConstructionInLoop {
     /// Flags `Symbol::new(&env, ...)` calls inside a loop body when the key
@@ -2366,7 +2383,6 @@ impl<'tcx> LateLintPass<'tcx> for StorageKeyConstructionInLoop {
 pub struct VecWhereSliceCouldBeUsed;
 
 rustc_session::impl_lint_pass!(VecWhereSliceCouldBeUsed => [VEC_WHERE_SLICE_COULD_BE_USED]);
-
 
 impl<'tcx> LateLintPass<'tcx> for VecWhereSliceCouldBeUsed {
     /// Inspects each function parameter and emits a diagnostic when the
@@ -2437,7 +2453,6 @@ pub struct ExtendTtlInLoop;
 
 rustc_session::impl_lint_pass!(ExtendTtlInLoop => [EXTEND_TTL_IN_LOOP]);
 
-
 impl<'tcx> LateLintPass<'tcx> for ExtendTtlInLoop {
     /// Flags a call to `extend_ttl` on instance, persistent, or temporary
     /// storage when the call site sits directly inside a loop body.
@@ -2489,7 +2504,6 @@ pub struct LinearScanInLoop;
 
 rustc_session::impl_lint_pass!(LinearScanInLoop => [LINEAR_SCAN_IN_LOOP]);
 
-
 impl<'tcx> LateLintPass<'tcx> for LinearScanInLoop {
     fn check_expr(&mut self, cx: &LateContext<'tcx>, expr: &'tcx hir::Expr<'tcx>) {
         if let hir::ExprKind::MethodCall(path_segment, receiver, _args, _span) = expr.kind {
@@ -2528,13 +2542,11 @@ pub struct PersistentReadWithoutTtlExtension;
 
 rustc_session::impl_lint_pass!(PersistentReadWithoutTtlExtension => [PERSISTENT_READ_WITHOUT_TTL_EXTENSION]);
 
-
 struct PersistentReadVisitor<'a, 'tcx> {
     cx: &'a LateContext<'tcx>,
     reads: Vec<&'tcx hir::Expr<'tcx>>,
     extend_ttl_found: bool,
 }
-
 
 impl<'tcx> Visitor<'tcx> for PersistentReadVisitor<'_, 'tcx> {
     fn visit_expr(&mut self, expr: &'tcx hir::Expr<'tcx>) {
@@ -2564,7 +2576,6 @@ impl<'tcx> Visitor<'tcx> for PersistentReadVisitor<'_, 'tcx> {
         intravisit::walk_expr(self, expr);
     }
 }
-
 
 impl<'tcx> LateLintPass<'tcx> for PersistentReadWithoutTtlExtension {
     fn check_fn(
@@ -2604,9 +2615,7 @@ pub struct RequireAuthInLoop;
 
 rustc_session::impl_lint_pass!(RequireAuthInLoop => [REQUIRE_AUTH_IN_LOOP]);
 
-
 const REQUIRE_AUTH_METHODS: &[&str] = &["require_auth", "require_auth_for_args"];
-
 
 impl<'tcx> LateLintPass<'tcx> for RequireAuthInLoop {
     fn check_expr(&mut self, cx: &LateContext<'tcx>, expr: &'tcx hir::Expr<'tcx>) {
@@ -2640,7 +2649,6 @@ impl<'tcx> LateLintPass<'tcx> for RequireAuthInLoop {
 pub struct InstanceStorageForUnboundedData;
 
 rustc_session::impl_lint_pass!(InstanceStorageForUnboundedData => [INSTANCE_STORAGE_FOR_UNBOUNDED_DATA]);
-
 
 impl<'tcx> LateLintPass<'tcx> for InstanceStorageForUnboundedData {
     /// Flags `env.storage().instance().set(&key, &value)` where `value`'s own
@@ -2716,7 +2724,6 @@ impl<'tcx> LateLintPass<'tcx> for InstanceStorageForUnboundedData {
     }
 }
 
-
 // =======================================================================
 // formatted_panic_payload — Lint
 // =======================================================================
@@ -2741,7 +2748,6 @@ struct FormatArgsCollector {
     storage: FormatArgsStorage,
 }
 
-
 impl FormatArgsCollector {
     fn new(storage: FormatArgsStorage) -> Self {
         Self {
@@ -2751,9 +2757,7 @@ impl FormatArgsCollector {
     }
 }
 
-
 rustc_session::impl_lint_pass!(FormatArgsCollector => []);
-
 
 impl EarlyLintPass for FormatArgsCollector {
     fn check_expr(&mut self, _cx: &EarlyContext<'_>, expr: &rustc_ast::Expr) {
@@ -2768,7 +2772,6 @@ impl EarlyLintPass for FormatArgsCollector {
     }
 }
 
-
 /// Late pass backing [`FORMATTED_PANIC_PAYLOAD`]. Holds the [`FormatArgsStorage`]
 /// populated by [`FormatArgsCollector`] so it can distinguish a zero-argument
 /// `panic!("literal")` (cheap: no `core::fmt` machinery) from a formatted
@@ -2778,25 +2781,20 @@ pub struct FormattedPanicPayload {
     format_args: FormatArgsStorage,
 }
 
-
 impl FormattedPanicPayload {
     fn new(format_args: FormatArgsStorage) -> Self {
         Self { format_args }
     }
 }
 
-
 rustc_session::impl_lint_pass!(FormattedPanicPayload => [FORMATTED_PANIC_PAYLOAD]);
-
 
 const FORMATTED_PANIC_PAYLOAD_HELP: &str = "formatted messages pull core::fmt into the contract (binary size on every deploy) and run \
      formatting instructions on the failure path; use panic_with_error!(env, Error::Variant) with \
      a #[contracterror] enum instead, which compiles to a plain integer error code with neither cost";
 
-
 const FORMATTED_PANIC_PAYLOAD_MSG: &str =
     "formatted panic payload pulls in string-formatting machinery";
-
 
 /// Strips any number of leading `&`s, returning the innermost referent.
 ///
@@ -2810,7 +2808,6 @@ fn peel_ref_expr<'tcx>(mut expr: &'tcx hir::Expr<'tcx>) -> &'tcx hir::Expr<'tcx>
     }
     expr
 }
-
 
 /// Whether `expr` — a `format!(...)` call — is, modulo any number of `&`
 /// wrappers, the message argument of an enclosing `.expect(...)` call.
@@ -2836,7 +2833,6 @@ fn is_expect_format_message<'tcx>(cx: &LateContext<'tcx>, expr: &'tcx hir::Expr<
     }
     false
 }
-
 
 impl<'tcx> LateLintPass<'tcx> for FormattedPanicPayload {
     /// Flags three call shapes, all of which pull `core::fmt` formatting
@@ -2922,12 +2918,10 @@ impl<'tcx> LateLintPass<'tcx> for FormattedPanicPayload {
     }
 }
 
-
 /// Concrete pass that fires [`UNWRAP_ON_STORAGE_GET`].
 pub struct UnwrapOnStorageGet;
 
 rustc_session::impl_lint_pass!(UnwrapOnStorageGet => [UNWRAP_ON_STORAGE_GET]);
-
 
 impl<'tcx> LateLintPass<'tcx> for UnwrapOnStorageGet {
     /// Flags `.unwrap()` / `.expect()` whose receiver is a `get` call on one
@@ -2966,7 +2960,6 @@ impl<'tcx> LateLintPass<'tcx> for UnwrapOnStorageGet {
     }
 }
 
-
 #[derive(Default)]
 pub struct UnboundedRecursion {
     /// Call graph edges collected while walking every function body:
@@ -2974,9 +2967,7 @@ pub struct UnboundedRecursion {
     edges: Vec<(DefId, HirId, DefId)>,
 }
 
-
 rustc_session::impl_lint_pass!(UnboundedRecursion => [UNBOUNDED_RECURSION]);
-
 
 impl<'tcx> LateLintPass<'tcx> for UnboundedRecursion {
     fn check_fn(
@@ -3009,7 +3000,6 @@ impl<'tcx> LateLintPass<'tcx> for UnboundedRecursion {
     }
 }
 
-
 /// Walks a single function body and records `(caller, call_site, callee)` edges
 /// for every call whose target resolves to a local function definition.
 struct FnCallCollector<'a, 'tcx> {
@@ -3017,7 +3007,6 @@ struct FnCallCollector<'a, 'tcx> {
     caller: DefId,
     edges: &'a mut Vec<(DefId, HirId, DefId)>,
 }
-
 
 impl<'a, 'tcx> Visitor<'tcx> for FnCallCollector<'a, 'tcx> {
     fn visit_expr(&mut self, expr: &'tcx hir::Expr<'tcx>) {
@@ -3049,7 +3038,6 @@ impl<'a, 'tcx> Visitor<'tcx> for FnCallCollector<'a, 'tcx> {
     fn visit_item(&mut self, _item: &'tcx hir::Item<'tcx>) {}
 }
 
-
 /// Verdict for a single recursive call site.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Boundedness {
@@ -3061,7 +3049,6 @@ enum Boundedness {
     Unknown,
 }
 
-
 /// Verdict for a single argument passed at a recursive call site.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ArgB {
@@ -3069,7 +3056,6 @@ enum ArgB {
     Const,
     Unknown,
 }
-
 
 fn analyze_recursion(cx: &LateContext<'_>, edges: &[(DefId, HirId, DefId)]) {
     // Adjacency list: caller -> callees.
@@ -3108,7 +3094,6 @@ fn analyze_recursion(cx: &LateContext<'_>, edges: &[(DefId, HirId, DefId)]) {
     }
 }
 
-
 /// Returns `true` if there is a non-trivial path from `from` to `to` in `adj`.
 fn can_reach(adj: &HashMap<DefId, Vec<DefId>>, from: DefId, to: DefId) -> bool {
     let mut stack: Vec<DefId> = adj.get(&from).cloned().unwrap_or_default();
@@ -3125,7 +3110,6 @@ fn can_reach(adj: &HashMap<DefId, Vec<DefId>>, from: DefId, to: DefId) -> bool {
     }
     false
 }
-
 
 /// Builds one representative cycle path `start -> ... -> target`, entering
 /// through `first` (a direct successor of `start` that reaches `target`).
@@ -3169,7 +3153,6 @@ fn find_cycle(
     }
 }
 
-
 fn call_boundedness<'tcx>(
     cx: &LateContext<'tcx>,
     tyck: &ty::TypeckResults<'tcx>,
@@ -3204,7 +3187,6 @@ fn call_boundedness<'tcx>(
         Boundedness::Unknown
     }
 }
-
 
 fn arg_boundedness<'tcx>(
     cx: &LateContext<'tcx>,
@@ -3242,7 +3224,6 @@ fn arg_boundedness<'tcx>(
     ArgB::Unknown
 }
 
-
 fn is_slicing<'tcx>(expr: &'tcx hir::Expr<'tcx>) -> bool {
     match expr.kind {
         hir::ExprKind::Index(_, idx, _) => is_range(idx),
@@ -3262,13 +3243,11 @@ fn is_slicing<'tcx>(expr: &'tcx hir::Expr<'tcx>) -> bool {
     }
 }
 
-
 fn is_range<'tcx>(expr: &'tcx hir::Expr<'tcx>) -> bool {
     // Range literals desugar to `Range*` struct constructors, so detect them by
     // their desugaring span rather than a dedicated `ExprKind` variant.
     expr.span.is_desugaring(DesugaringKind::RangeExpr)
 }
-
 
 fn is_const_expr<'tcx>(expr: &'tcx hir::Expr<'tcx>) -> bool {
     match expr.kind {
@@ -3288,7 +3267,6 @@ fn is_const_expr<'tcx>(expr: &'tcx hir::Expr<'tcx>) -> bool {
     }
 }
 
-
 // on Unix versus `ui\x.rs` on Windows -- so a single set of fixtures cannot
 // satisfy both. This never surfaced before because the Windows job failed at
 // checkout and never reached the test step.
@@ -3297,7 +3275,6 @@ fn is_const_expr<'tcx>(expr: &'tcx hir::Expr<'tcx>) -> bool {
 fn ui() {
     dylint_testing::ui_test(env!("CARGO_PKG_NAME"), "ui");
 }
-
 
 #[test]
 fn ui_fixtures_match_registered_lints_and_have_no_unknown_lint_warnings() {
@@ -3351,7 +3328,6 @@ fn ui_fixtures_match_registered_lints_and_have_no_unknown_lint_warnings() {
         }
     }
 }
-
 
 /// Benchmarks the read/write matching lookup backing
 /// [`STORAGE_WRITE_WITHOUT_READ`] — a `HashSet::contains` lookup (current)

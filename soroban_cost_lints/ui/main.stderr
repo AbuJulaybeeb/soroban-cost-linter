@@ -40,14 +40,14 @@ LL |         env.storage().instance().set(&i, &1); // Should Warn
    |
    = help: consider reading the value before writing or using `.has()` to check existence
 
-warning: storage operation inside a loop
+error: storage operation inside a loop
   --> $DIR/main.rs:250:9
    |
 LL |         env.storage().instance().set(&i, &1); // Should Warn
    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    |
    = help: move storage operations out of the loop or accumulate mutations in memory first
-   = note: `#[warn(soroban_storage_in_loop)]` on by default
+   = note: `#[deny(soroban_storage_in_loop)]` on by default
 
 warning: loop-invariant storage operation inside a loop
   --> $DIR/main.rs:250:9
@@ -74,13 +74,22 @@ LL |         let _: Option<i32> = env.storage().persistent().get(&i); // Should 
    = help: after reading from persistent storage, call extend_ttl on the same key to avoid paying archival cost on subsequent access
    = note: `#[warn(persistent_read_without_ttl_extension)]` on by default
 
-warning: storage operation inside a loop
+error: storage operation inside a loop
   --> $DIR/main.rs:257:30
    |
 LL |         let _: Option<i32> = env.storage().persistent().get(&i); // Should Warn
    |                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    |
    = help: if the read is loop-invariant, hoist it out of the loop; otherwise batch where possible
+
+warning: storage read result is discarded
+  --> $DIR/main.rs:257:30
+   |
+LL |         let _: Option<i32> = env.storage().persistent().get(&i); // Should Warn
+   |                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: delete the storage read or use its returned value
+   = note: `#[warn(discarded_storage_read)]` on by default
 
 warning: loop-invariant storage operation inside a loop
   --> $DIR/main.rs:257:30
@@ -98,7 +107,7 @@ LL |         let _: Option<i32> = env.storage().persistent().get(&i); // Should 
    |
    = help: hoist this storage operation out of the loop
 
-warning: storage operation inside a loop
+error: storage operation inside a loop
   --> $DIR/main.rs:264:12
    |
 LL |         if env.storage().temporary().has(&1) { // Should Warn
@@ -166,8 +175,9 @@ warning: redundant clone on Env object
   --> $DIR/main.rs:288:19
    |
 LL |     let _cloned = env.clone(); // Should Warn
-   |                   ^^^^^^^^^^^ help: pass Env by reference or value instead of cloning: `env`
+   |                   ^^^^^^^^^^^
    |
+   = help: pass Env by reference or value instead of cloning
    = note: `#[warn(redundant_env_clone)]` on by default
 
 warning: unnecessary host function call inside loop
@@ -178,6 +188,23 @@ LL |         let _seq = env.ledger().sequence(); // Should Warn
    |
    = help: cache the result outside the loop when the call is loop-invariant
    = note: `#[warn(unnecessary_host_function_call)]` on by default
+
+warning: reading ledger context `sequence` inside a loop — the value cannot change during this invocation
+  --> $DIR/main.rs:331:20
+   |
+LL |         let _seq = env.ledger().sequence(); // Should Warn
+   |                    ^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: ledger context values (sequence) are invariant during a single invocation; hoist this read outside the loop to avoid repeated host calls
+   = note: `#[warn(ledger_context_read_in_loop)]` on by default
+
+warning: reading ledger context `sequence` inside a loop — the value cannot change during this invocation
+  --> $DIR/main.rs:345:20
+   |
+LL |         let _seq = env.ledger().sequence(); // Good (allowed)
+   |                    ^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: ledger context values (sequence) are invariant during a single invocation; hoist this read outside the loop to avoid repeated host calls
 
 warning: unnecessary host function call inside loop
   --> $DIR/main.rs:352:21
@@ -227,6 +254,14 @@ LL |         let _seq = env.ledger().sequence(); // Should Warn — called once 
    |
    = help: cache the result outside the loop when the call is loop-invariant
 
+warning: reading ledger context `sequence` inside a loop — the value cannot change during this invocation
+  --> $DIR/main.rs:387:20
+   |
+LL |         let _seq = env.ledger().sequence(); // Should Warn — called once per closure invocation
+   |                    ^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: ledger context values (sequence) are invariant during a single invocation; hoist this read outside the loop to avoid repeated host calls
+
 warning: unnecessary host function call inside loop
   --> $DIR/main.rs:393:9
    |
@@ -262,6 +297,14 @@ LL |     env.storage().instance().set(&"key1", &1); // Should Warn — no prior 
    |                              ^^^^^^^^^^^^^^^^
    |
    = help: consider reading the value before writing or using `.has()` to check existence
+
+warning: storage read result is discarded
+  --> $DIR/main.rs:455:26
+   |
+LL |     let _: Option<i32> = env.storage().instance().get(&"key1"); // Read first
+   |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: delete the storage read or use its returned value
 
 warning: inefficient bytes concatenation in a loop
   --> $DIR/main.rs:476:18
@@ -299,7 +342,7 @@ LL |         map.insert(&i, &1); // Good (allowed)
    = help: accumulate values in native Rust collections first, then batch host operations or convert to SDK containers once after the loop; pre-size where practical
 
 warning: cross-contract call inside a loop
-  --> $DIR/main.rs:529:22
+  --> $DIR/main.rs:529:28
    |
 LL |         let _result: i32 = env.invoke_contract(&addr, &func, ()); // Should Warn
    |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -308,7 +351,7 @@ LL |         let _result: i32 = env.invoke_contract(&addr, &func, ()); // Should
    = note: `#[warn(contract_call_in_loop)]` on by default
 
 warning: cross-contract call inside a loop
-  --> $DIR/main.rs:536:22
+  --> $DIR/main.rs:536:28
    |
 LL |         let _result: i32 = env.invoke_contract(&addr, &func, ()); // Should Warn
    |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -319,82 +362,65 @@ warning: redundant clone on Env object
   --> $DIR/main.rs:551:30
    |
 LL |     let client = TokenClient(env.clone());
-   |                              ^^^^^^^^^^^ help: pass Env by reference or value instead of cloning: `env`
-
-warning: token transfer inside a loop
-  --> $DIR/main.rs:555:9
+   |                              ^^^^^^^^^^^
    |
-LL |         client.transfer(&from, &to, &100); // Should Warn
-   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   |
-   = help: batch the transfer, or switch to a claim pattern where recipients pull instead of the contract pushing
-   = note: `#[warn(token_transfer_in_loop)]` on by default
+   = help: pass Env by reference or value instead of cloning
 
 warning: redundant clone on Env object
   --> $DIR/main.rs:560:30
    |
 LL |     let client = TokenClient(env.clone());
-   |                              ^^^^^^^^^^^ help: pass Env by reference or value instead of cloning: `env`
-
-warning: token transfer inside a loop
-  --> $DIR/main.rs:565:9
+   |                              ^^^^^^^^^^^
    |
-LL |         client.transfer(&from, &to, &100); // Should Warn
-   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   |
-   = help: batch the transfer, or switch to a claim pattern where recipients pull instead of the contract pushing
+   = help: pass Env by reference or value instead of cloning
 
 warning: redundant clone on Env object
   --> $DIR/main.rs:571:30
    |
 LL |     let client = TokenClient(env.clone());
-   |                              ^^^^^^^^^^^ help: pass Env by reference or value instead of cloning: `env`
-
-warning: token transfer inside a loop
-  --> $DIR/main.rs:575:9
+   |                              ^^^^^^^^^^^
    |
-LL |         client.transfer(&from, &to, &100); // Should Warn
-   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   |
-   = help: batch the transfer, or switch to a claim pattern where recipients pull instead of the contract pushing
+   = help: pass Env by reference or value instead of cloning
 
 warning: redundant clone on Env object
   --> $DIR/main.rs:581:30
    |
 LL |     let client = TokenClient(env.clone());
-   |                              ^^^^^^^^^^^ help: pass Env by reference or value instead of cloning: `env`
-
-warning: token transfer inside a loop
-  --> $DIR/main.rs:586:9
+   |                              ^^^^^^^^^^^
    |
-LL |         client.transfer_from(&spender, &from, &to, &50); // Should Warn
-   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   |
-   = help: batch the transfer, or switch to a claim pattern where recipients pull instead of the contract pushing
+   = help: pass Env by reference or value instead of cloning
 
 warning: redundant clone on Env object
   --> $DIR/main.rs:591:30
    |
 LL |     let client = TokenClient(env.clone());
-   |                              ^^^^^^^^^^^ help: pass Env by reference or value instead of cloning: `env`
+   |                              ^^^^^^^^^^^
+   |
+   = help: pass Env by reference or value instead of cloning
 
 warning: redundant clone on Env object
   --> $DIR/main.rs:600:30
    |
 LL |     let client = TokenClient(env.clone());
-   |                              ^^^^^^^^^^^ help: pass Env by reference or value instead of cloning: `env`
+   |                              ^^^^^^^^^^^
+   |
+   = help: pass Env by reference or value instead of cloning
 
 warning: redundant clone on Env object
   --> $DIR/main.rs:607:30
    |
 LL |     let client = TokenClient(env.clone());
-   |                              ^^^^^^^^^^^ help: pass Env by reference or value instead of cloning: `env`
+   |                              ^^^^^^^^^^^
+   |
+   = help: pass Env by reference or value instead of cloning
 
 warning: redundant clone on Env object
   --> $DIR/main.rs:616:30
    |
 LL |     let client = TokenClient(env.clone());
-   |                              ^^^^^^^^^^^ help: pass Env by reference or value instead of cloning: `env`
+   |                              ^^^^^^^^^^^
+   |
+   = help: pass Env by reference or value instead of cloning
 
 warning: unnecessary host function call inside loop
   --> $DIR/main.rs:633:9
@@ -422,7 +448,7 @@ LL |         env.crypto().ed25519_verify(&key, &msg, &sig); // Good (allowed)
    = help: cache the result outside the loop when the call is loop-invariant
 
 warning: cross-contract call inside a loop
-  --> $DIR/main.rs:685:22
+  --> $DIR/main.rs:685:28
    |
 LL |         let _result: i32 = env.invoke_contract(&addr, &func, ()); // Should Warn
    |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -502,5 +528,5 @@ LL |     let _b: Option<i32> = env.storage().temporary().get(&key); // Should Wa
    |
    = help: store the value from the first read and reuse it instead of reading again
 
-warning: 64 warnings emitted
+error: aborting due to 3 previous errors; 62 warnings emitted
 
