@@ -356,12 +356,14 @@ pub fn generate_sarif_report(findings: &[LintFinding]) -> String {
             let uri = if let Ok(current_dir) = std::env::current_dir() {
                 let p = std::path::Path::new(&f.file);
                 if let Ok(stripped) = p.strip_prefix(&current_dir) {
-                    format!("file:///{}", stripped.to_string_lossy().replace('\\', "/"))
+                    stripped.to_string_lossy().replace('\\', "/")
+                } else if p.is_absolute() {
+                    format!("file://{}", p.to_string_lossy().replace('\\', "/"))
                 } else {
-                    format!("file:///{}", f.file.replace('\\', "/"))
+                    f.file.replace('\\', "/")
                 }
             } else {
-                format!("file:///{}", f.file.replace('\\', "/"))
+                f.file.replace('\\', "/")
             };
 
             let region = if f.span.line_start > 0 {
@@ -405,6 +407,22 @@ pub fn generate_sarif_report(findings: &[LintFinding]) -> String {
         })
         .collect();
 
+    let mut unique_rules = std::collections::HashSet::new();
+    for f in findings {
+        unique_rules.insert(f.name.clone());
+    }
+    let rules: Vec<serde_json::Value> = unique_rules
+        .into_iter()
+        .map(|name| {
+            serde_json::json!({
+                "id": name,
+                "shortDescription": {
+                    "text": format!("Cost lint rule: {}", name)
+                }
+            })
+        })
+        .collect();
+
     let report = SarifReport {
         schema: "https://schemastore.azurewebsites.net/schemas/json/sarif-2.1.0-rtm.5.json"
             .to_string(),
@@ -417,7 +435,7 @@ pub fn generate_sarif_report(findings: &[LintFinding]) -> String {
                     information_uri: Some(
                         "https://github.com/Tollcraft/soroban-cost-linter".to_string(),
                     ),
-                    rules: vec![],
+                    rules,
                 },
             },
             results,
