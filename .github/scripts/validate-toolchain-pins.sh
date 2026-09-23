@@ -61,7 +61,13 @@ if [ -z "$CLIPPY_REV" ]; then
 else
   echo "clippy_utils rev: ${CLIPPY_REV}"
 
-  RESPONSE=$(curl -s "https://api.github.com/repos/rust-lang/rust-clippy/commits/${CLIPPY_REV}")
+  # Authenticate when possible to avoid rate limits on shared runner IPs,
+  # and retry transient API failures before giving up.
+  CURL_OPTS=(-s --retry 3 --retry-delay 2 --retry-all-errors -H "Accept: application/vnd.github+json")
+  if [ -n "${GITHUB_TOKEN:-}" ]; then
+    CURL_OPTS+=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
+  fi
+  RESPONSE=$(curl "${CURL_OPTS[@]}" "https://api.github.com/repos/rust-lang/rust-clippy/commits/${CLIPPY_REV}")
 
   # Try jq first, then python3 as fallback
   COMMIT_DATE=""

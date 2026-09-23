@@ -1868,6 +1868,8 @@ mod tests {
         // the environment.  On some CI runners (notably Windows) the
         // variable is injected and cannot be reliably removed, so we
         // skip rather than produce a false failure.
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe { std::env::remove_var("NO_COLOR") };
         if std::env::var("NO_COLOR").is_ok() {
             eprintln!(
                 "skipping resolve_color_auto_no_color_unset_resolves_to_auto: \

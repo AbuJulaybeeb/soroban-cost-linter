@@ -72,7 +72,23 @@ if ($clippyRev) {
     Write-Host "clippy_utils rev: $clippyRev"
 
     try {
-        $response = Invoke-RestMethod -Uri "https://api.github.com/repos/rust-lang/rust-clippy/commits/$clippyRev"
+        $headers = @{ "Accept" = "application/vnd.github+json" }
+        if ($env:GITHUB_TOKEN) {
+            $headers.Authorization = "Bearer $env:GITHUB_TOKEN"
+        }
+        $retries = 3
+        for ($i = 0; $i -le $retries; $i++) {
+            try {
+                $response = Invoke-RestMethod -Uri "https://api.github.com/repos/rust-lang/rust-clippy/commits/$clippyRev" -Headers $headers
+                break
+            } catch {
+                if ($i -lt $retries) {
+                    Start-Sleep -Seconds 2
+                } else {
+                    throw
+                }
+            }
+        }
         $commitDate = ($response.commit.committer.date -split 'T')[0]
     } catch {
         Write-Error "::error file=soroban_cost_lints/Cargo.toml::Invalid or unreachable clippy_utils rev $clippyRev. Update the rev in soroban_cost_lints/Cargo.toml."
