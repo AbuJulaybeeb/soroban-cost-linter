@@ -663,20 +663,20 @@ multiline description"
     }
 
     fn find_binary() -> PathBuf {
+        static INIT: std::sync::Once = std::sync::Once::new();
         let ws = workspace_root();
-        // cargo puts binaries in target/debug/.
         let path = ws.join("target/debug/generate-lint-docs");
-        if path.exists() {
-            return path;
-        }
-        // Fallback: try to build it first.
-        let status = Command::new("cargo")
-            .args(["build", "-p", "generate-lint-docs"])
-            .current_dir(&ws)
-            .status()
-            .expect("Failed to run cargo build");
-        assert!(status.success(), "cargo build -p generate-lint-docs failed");
-        ws.join("target/debug/generate-lint-docs")
+        INIT.call_once(|| {
+            if !path.exists() {
+                let status = Command::new("cargo")
+                    .args(["build", "-p", "generate-lint-docs"])
+                    .current_dir(&ws)
+                    .status()
+                    .expect("Failed to run cargo build");
+                assert!(status.success(), "cargo build -p generate-lint-docs failed");
+            }
+        });
+        path
     }
 
     #[test]
