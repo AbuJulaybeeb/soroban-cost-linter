@@ -716,20 +716,20 @@ multiline description"
     }
 
     fn find_binary() -> PathBuf {
+        static INIT: std::sync::Once = std::sync::Once::new();
         let ws = workspace_root();
-        // cargo puts binaries in target/debug/.
         let path = ws.join("target/debug/generate-lint-docs");
-        if path.exists() {
-            return path;
-        }
-        // Fallback: try to build it first.
-        let status = Command::new("cargo")
-            .args(["build", "-p", "generate-lint-docs"])
-            .current_dir(&ws)
-            .status()
-            .expect("Failed to run cargo build");
-        assert!(status.success(), "cargo build -p generate-lint-docs failed");
-        ws.join("target/debug/generate-lint-docs")
+        INIT.call_once(|| {
+            if !path.exists() {
+                let status = Command::new("cargo")
+                    .args(["build", "-p", "generate-lint-docs"])
+                    .current_dir(&ws)
+                    .status()
+                    .expect("Failed to run cargo build");
+                assert!(status.success(), "cargo build -p generate-lint-docs failed");
+            }
+        });
+        path
     }
 
     #[test]
@@ -762,12 +762,16 @@ multiline description"
         fs::write(&readme_path, "STALE CONTENT").unwrap();
 
         let registry_path = root.join("docs/lints/lint-registry.json");
-        // Write the correct registry so only README is stale.
         let entries = parse_lib_rs(SINGLE_LINT);
         let correct_registry = generate_registry(&entries);
         let correct_catalog = generate_catalog(&entries);
         fs::write(&registry_path, &correct_registry).unwrap();
         let catalog_path = root.join("docs/lint_catalog.md");
+        fs::write(&catalog_path, &correct_catalog).unwrap();
+
+        let catalog_path = root.join("docs/lint_catalog.md");
+        fs::create_dir_all(catalog_path.parent().unwrap()).unwrap();
+        let correct_catalog = generate_catalog(&entries);
         fs::write(&catalog_path, &correct_catalog).unwrap();
 
         let status = Command::new(&bin)
@@ -801,6 +805,11 @@ multiline description"
 
         let registry_path = root.join("docs/lints/lint-registry.json");
         fs::write(&registry_path, "STALE CONTENT").unwrap();
+
+        let catalog_path = root.join("docs/lint_catalog.md");
+        fs::create_dir_all(catalog_path.parent().unwrap()).unwrap();
+        let correct_catalog = generate_catalog(&entries);
+        fs::write(&catalog_path, &correct_catalog).unwrap();
 
         let status = Command::new(&bin)
             .args(["--check", "--workspace-root", root.to_str().unwrap()])
