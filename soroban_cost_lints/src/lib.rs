@@ -728,9 +728,20 @@ fn cached_def_path_str(tcx: TyCtxt<'_>, def_id: DefId) -> String {
 fn match_soroban_def_path(cx: &LateContext<'_>, def_id: DefId, segments: &[&str]) -> bool {
     let full = cached_def_path_str(cx.tcx, def_id);
     let suffix = segments.join("::");
-    full == suffix
-        || full.ends_with(&format!("::{}", suffix))
-            && full.starts_with(&format!("{}::", segments[0]))
+    if full == suffix {
+        return true;
+    }
+    if full.ends_with(&format!("::{}", suffix)) {
+        let root_crate = full.split("::").next().unwrap_or("");
+        if root_crate == segments[0]
+            || root_crate == "soroban_sdk"
+            || root_crate == "soroban_env_host"
+            || root_crate == "soroban_env_common"
+        {
+            return true;
+        }
+    }
+    false
 }
 
 /// Returns whether `expr_ty` is one of the requested Soroban ADT types.
@@ -817,9 +828,20 @@ fn matches_any_path<'tcx>(cx: &LateContext<'tcx>, def_id: DefId, paths: &[&[&str
 fn match_soroban_def_path_tcx(tcx: TyCtxt<'_>, def_id: DefId, segments: &[&str]) -> bool {
     let full = tcx.def_path_str(def_id);
     let suffix = segments.join("::");
-    full == suffix
-        || full.ends_with(&format!("::{}", suffix))
-            && full.starts_with(&format!("{}::", segments[0]))
+    if full == suffix {
+        return true;
+    }
+    if full.ends_with(&format!("::{}", suffix)) {
+        let root_crate = full.split("::").next().unwrap_or("");
+        if root_crate == segments[0]
+            || root_crate == "soroban_sdk"
+            || root_crate == "soroban_env_host"
+            || root_crate == "soroban_env_common"
+        {
+            return true;
+        }
+    }
+    false
 }
 
 fn matches_any_path_tcx(tcx: TyCtxt<'_>, def_id: DefId, paths: &[&[&str]]) -> bool {
