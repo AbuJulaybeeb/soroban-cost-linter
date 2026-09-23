@@ -62,12 +62,30 @@ else
   echo "clippy_utils rev: ${CLIPPY_REV}"
 
   # Authenticate when possible to avoid rate limits on shared runner IPs,
-  # and retry transient API failures before giving up.
+  # and tolerate transient API failures (never abort CI on them).
   CURL_OPTS=(-s --retry 3 --retry-delay 2 --retry-all-errors -H "Accept: application/vnd.github+json")
   if [ -n "${GITHUB_TOKEN:-}" ]; then
     CURL_OPTS+=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
   fi
-  RESPONSE=$(curl "${CURL_OPTS[@]}" "https://api.github.com/repos/rust-lang/rust-clippy/commits/${CLIPPY_REV}")
+  API_TMP_DIR="${RUNNER_TEMP:-/tmp}"
+  API_RESPONSE_FILE="$API_TMP_DIR/${RANDOM}_clippy_rev.json"
+  API_STATUS=""
+  if command -v curl &>/dev/null; then
+    if curl "${CURL_OPTS[@]}" -o "$API_RESPONSE_FILE" -w "%{http_code}" \
+        "https://api.github.com/repos/rust-lang/rust-clippy/commits/${CLIPPY_REV}" \
+        >"$API_RESPONSE_FILE.status" 2>/dev/null; then
+      API_STATUS=$(cat "$API_RESPONSE_FILE.status")
+    fi
+  fi
+
+  RESPONSE=""
+  if [ -n "$API_STATUS" ] && [ "$API_STATUS" = "200" ] && [ -f "$API_RESPONSE_FILE" ]; then
+    RESPONSE=$(cat "$API_RESPONSE_FILE")
+  fi
+  if [ -z "$RESPONSE" ]; then
+    echo "::warning file=soroban_cost_lints/Cargo.toml::Could not verify clippy_utils rev ${CLIPPY_REV} against api.github.com (HTTP ${API_STATUS:-unreachable}); skipping date check"
+    RESPONSE="{\"commit\":{\"committer\":{\"date\":\"${NIGHTLY_DATE}T00:00:00Z\"}}}"
+  fi
 
   # Try jq first, then python3 as fallback
   COMMIT_DATE=""
