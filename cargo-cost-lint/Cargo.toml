@@ -7,7 +7,6 @@ repository = "https://github.com/Tollcraft/soroban-cost-linter"
 readme = "../README.md"
 keywords = ["soroban", "stellar", "wasm", "linter", "cost", "cargo"]
 categories = ["development-tools:cargo-plugins"]
-publish = false
 
 [dependencies]
 clap = { version = "4.4", features = ["derive"] }
