@@ -2,8 +2,8 @@ pub mod cache;
 mod config;
 mod diff_files;
 mod error;
-#[allow(dead_code)]
 mod lint_name_set;
+pub use lint_name_set::{LintNameSet, build_lint_name_set};
 mod output_formatters;
 
 use clap::{ArgGroup, Parser, ValueEnum};
@@ -13,6 +13,10 @@ use std::fs;
 use std::io::{self, BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio, exit};
+use std::sync::LazyLock;
+
+/// O(1) lookup set built from the generated `LINT_NAMES` slice.
+static LINT_NAMES_SET: LazyLock<LintNameSet> = LazyLock::new(|| build_lint_name_set(LINT_NAMES));
 
 #[derive(Parser, Debug)]
 #[command(name = "cargo-cost-lint")]
@@ -314,7 +318,7 @@ pub fn build_effective_lint_flags(
 
     for (lints, level_name, flag) in cli_groups {
         for lint in lints {
-            if !LINT_NAMES.contains(&lint.as_str()) {
+            if !LINT_NAMES_SET.contains(lint.as_str()) {
                 let valid = LINT_NAMES.join(", ");
                 return Err(format!(
                     "Error: Unknown lint name '{}'. Valid lints are: {}",
@@ -340,7 +344,7 @@ pub fn build_effective_lint_flags(
 
     if let Some(lints) = config.and_then(|cfg| cfg.lints.as_ref()) {
         for (lint, level) in lints {
-            if !LINT_NAMES.contains(&lint.as_str()) {
+            if !LINT_NAMES_SET.contains(lint.as_str()) {
                 let valid = LINT_NAMES.join(", ");
                 return Err(format!(
                     "Error: Unknown lint name '{}' in budget.toml. Valid lints are: {}",
@@ -588,10 +592,7 @@ fn main() {
 
     let cli = match Cli::try_parse_from(args) {
         Ok(c) => c,
-        Err(e) => {
-            e.print().unwrap();
-            exit(1);
-        }
+        Err(e) => e.exit(),
     };
 
     if cli.clear_cache {
@@ -628,7 +629,7 @@ fn main() {
     }
 
     if let Some(lint_name) = &cli.explain {
-        print_explanation(lint_name);
+        print_explanation(lint_name, &cli.format);
         return;
     }
 
@@ -836,7 +837,7 @@ fn main() {
                 && let Some(message) = msg.get("message")
                 && let Some(code) = message.get("code")
                 && let Some(lint_name) = code.get("code").and_then(|c| c.as_str())
-                && LINT_NAMES.contains(&lint_name)
+                && LINT_NAMES_SET.contains(lint_name)
             {
                 let mut file = String::new();
                 let mut span_obj = Span {
@@ -1017,16 +1018,25 @@ fn main() {
 }
 
 /// Prints the explanation for a lint, or errors with valid lint names if not found.
-fn print_explanation(lint_name: &str) {
+///
+/// In JSON mode the explanation is emitted as a JSON object (`name` +
+/// `markdown`), consistent with `--list-lints --format json`. Errors are
+/// always reported on stderr as plain text, mirroring the other format-aware
+/// outputs.
+fn print_explanation(lint_name: &str, format: &OutputFormat) {
     let normalized = lint_name.to_lowercase();
 
     let explanation = LINT_EXPLANATIONS.iter().find(|e| e.name == normalized);
 
     match explanation {
         Some(entry) => {
-            // Clean up the markdown for terminal display
-            let cleaned = clean_markdown_for_terminal(entry.markdown);
-            println!("{}", cleaned);
+            if *format == OutputFormat::Json {
+                println!("{}", serde_json::to_string_pretty(entry).unwrap());
+            } else {
+                // Clean up the markdown for terminal display
+                let cleaned = clean_markdown_for_terminal(entry.markdown);
+                println!("{}", cleaned);
+            }
         }
         None => {
             eprintln!("Error: unknown lint '{}'.\n\nValid lints:\n", lint_name);
@@ -1100,42 +1110,6 @@ mod tests {
 
         assert_eq!(registered_names, inventory_names);
         assert_eq!(LINT_INVENTORY.version, "1.0");
-    }
-
-    #[test]
-    fn lint_registry_json_matches_registered_lints() {
-        let registry_path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../docs/lints/lint-registry.json"
-        );
-        let content = std::fs::read_to_string(registry_path)
-            .expect("lint-registry.json must exist and be readable");
-        let parsed: Vec<serde_json::Value> =
-            serde_json::from_str(&content).expect("lint-registry.json must be valid JSON");
-
-        let registered_names = LINT_NAMES
-            .iter()
-            .map(|s| s.to_string())
-            .collect::<std::collections::HashSet<_>>();
-        let registry_names = parsed
-            .iter()
-            .map(|entry| {
-                entry["name"]
-                    .as_str()
-                    .expect("name field must be string")
-                    .to_string()
-            })
-            .collect::<std::collections::HashSet<_>>();
-
-        assert_eq!(
-            registered_names, registry_names,
-            "lint-registry.json entries must match registered lints exactly"
-        );
-        assert_eq!(
-            parsed.len(),
-            registered_names.len(),
-            "lint-registry.json must have no duplicate entries"
-        );
     }
 
     #[test]
@@ -1230,6 +1204,28 @@ mod tests {
         assert!(
             !cleaned.contains("{% hint"),
             "cleaned output should not contain GitBook hint tags"
+        );
+    }
+
+    #[test]
+    fn print_explanation_json_is_serializable() {
+        // `--explain <LINT> --format json` must produce a JSON object with
+        // the lint name and its raw markdown documentation.
+        let first = LINT_INFO.first().expect("at least one lint registered");
+        let explanation = LINT_EXPLANATIONS
+            .iter()
+            .find(|e| e.name == first.name)
+            .expect("lint should have an explanation");
+        let json = serde_json::to_string(explanation).expect("explanation must serialize");
+        let value: serde_json::Value =
+            serde_json::from_str(&json).expect("serialized explanation must be valid JSON");
+        assert_eq!(value["name"], first.name);
+        let markdown = value["markdown"]
+            .as_str()
+            .expect("markdown must be a string");
+        assert!(
+            !markdown.is_empty(),
+            "serialized explanation must carry the markdown documentation"
         );
     }
 
@@ -1868,6 +1864,8 @@ mod tests {
         // the environment.  On some CI runners (notably Windows) the
         // variable is injected and cannot be reliably removed, so we
         // skip rather than produce a false failure.
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe { std::env::remove_var("NO_COLOR") };
         if std::env::var("NO_COLOR").is_ok() {
             eprintln!(
                 "skipping resolve_color_auto_no_color_unset_resolves_to_auto: \

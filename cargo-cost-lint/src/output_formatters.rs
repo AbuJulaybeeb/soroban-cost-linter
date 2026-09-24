@@ -138,7 +138,7 @@ pub struct SarifReport {
 #[derive(Serialize)]
 pub struct SarifRun {
     pub tool: SarifTool,
-    pub results: Vec<serde_json::Value>,
+    pub results: Vec<SarifResult>,
 }
 
 /// Tool metadata for SARIF output.
@@ -157,7 +157,21 @@ pub struct SarifToolDriver {
     #[serde(rename = "informationUri")]
     pub information_uri: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub rules: Vec<serde_json::Value>,
+    pub rules: Vec<SarifRule>,
+}
+
+/// A single SARIF rule (one registered lint).
+#[derive(Serialize)]
+pub struct SarifRule {
+    pub id: String,
+    #[serde(rename = "shortDescription")]
+    pub short_description: SarifRuleShortDescription,
+}
+
+/// SARIF rule short-description container.
+#[derive(Serialize)]
+pub struct SarifRuleShortDescription {
+    pub text: String,
 }
 
 /// A single SARIF result (one lint finding).
@@ -214,14 +228,14 @@ pub struct SarifRegion {
     pub end_column: Option<usize>,
 }
 
-/// Print a single finding according to the CLI format.
-/// Returns true if anything was printed.
+/// Store a finding for SARIF generation and print it for human/machine
+/// readable formats (Text, Json, Github).
 pub fn handle_finding<W: Write>(
     cli: &crate::Cli,
     finding: &LintFinding,
     findings_acc: &mut Vec<LintFinding>,
     writer: &mut W,
-) -> crate::error::LinterResult<bool> {
+) -> crate::error::LinterResult<()> {
     // Store the finding for later SARIF generation.
     findings_acc.push(finding.clone());
     if cli.format == OutputFormat::Json {
@@ -232,19 +246,19 @@ pub fn handle_finding<W: Write>(
             ))
         })?;
         writeln!(writer, "{}", json_str)?;
-        return Ok(true);
+        return Ok(());
     }
     if cli.format == OutputFormat::Github {
         emit_github_annotation(finding, writer)?;
-        return Ok(true);
+        return Ok(());
     }
     // For non-SARIF formats we render the diagnostic message.
     if cli.format != OutputFormat::Sarif {
         let formatted = format_diagnostic(finding);
         writeln!(writer, "{}", formatted)?;
-        return Ok(true);
+        return Ok(());
     }
-    Ok(false)
+    Ok(())
 }
 
 /// Print a summary of findings at the end of a run.
@@ -344,7 +358,7 @@ pub fn format_diagnostic(finding: &LintFinding) -> String {
 
 /// Generate SARIF 2.1.0 JSON report from accumulated findings.
 pub fn generate_sarif_report(findings: &[LintFinding]) -> String {
-    let results: Vec<serde_json::Value> = findings
+    let results: Vec<SarifResult> = findings
         .iter()
         .map(|f| {
             let level = match f.level.as_str() {
@@ -356,12 +370,14 @@ pub fn generate_sarif_report(findings: &[LintFinding]) -> String {
             let uri = if let Ok(current_dir) = std::env::current_dir() {
                 let p = std::path::Path::new(&f.file);
                 if let Ok(stripped) = p.strip_prefix(&current_dir) {
-                    format!("file:///{}", stripped.to_string_lossy().replace('\\', "/"))
+                    stripped.to_string_lossy().replace('\\', "/")
+                } else if p.is_absolute() {
+                    format!("file://{}", p.to_string_lossy().replace('\\', "/"))
                 } else {
-                    format!("file:///{}", f.file.replace('\\', "/"))
+                    f.file.replace('\\', "/")
                 }
             } else {
-                format!("file:///{}", f.file.replace('\\', "/"))
+                f.file.replace('\\', "/")
             };
 
             let region = if f.span.line_start > 0 {
@@ -387,7 +403,7 @@ pub fn generate_sarif_report(findings: &[LintFinding]) -> String {
                 None
             };
 
-            let sarif_result = SarifResult {
+            SarifResult {
                 rule_id: f.name.clone(),
                 level: level.to_string(),
                 message: SarifMessage {
@@ -399,9 +415,21 @@ pub fn generate_sarif_report(findings: &[LintFinding]) -> String {
                         region,
                     },
                 }],
-            };
+            }
+        })
+        .collect();
 
-            serde_json::to_value(sarif_result).unwrap_or(serde_json::Value::Null)
+    let mut unique_rules = std::collections::HashSet::new();
+    for f in findings {
+        unique_rules.insert(f.name.clone());
+    }
+    let rules: Vec<SarifRule> = unique_rules
+        .into_iter()
+        .map(|name| SarifRule {
+            id: name.clone(),
+            short_description: SarifRuleShortDescription {
+                text: format!("Cost lint rule: {}", name),
+            },
         })
         .collect();
 
@@ -417,7 +445,7 @@ pub fn generate_sarif_report(findings: &[LintFinding]) -> String {
                     information_uri: Some(
                         "https://github.com/Tollcraft/soroban-cost-linter".to_string(),
                     ),
-                    rules: vec![],
+                    rules,
                 },
             },
             results,

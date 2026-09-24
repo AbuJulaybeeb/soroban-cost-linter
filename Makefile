@@ -31,3 +31,4 @@ doc:
 # here because it requires external tools installed; make check runs the static
 # and test gates that match CI.
 check: fmt-check lint test check-docs
+
