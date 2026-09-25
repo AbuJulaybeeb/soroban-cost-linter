@@ -1,5 +1,5 @@
 use clippy_utils::diagnostics::span_lint_and_help;
-use rustc_hir::{Expr, ExprKind, Item, ItemKind};
+use rustc_hir::{Expr, ExprKind};
 use rustc_lint::{LateContext, LateLintPass};
 use rustc_middle::ty;
 use rustc_session::declare_lint_pass;
@@ -23,25 +23,6 @@ impl<'tcx> LateLintPass<'tcx> for LargeConstantArray {
                     LARGE_CONSTANT_ARRAY,
                     expr.span,
                     "embedding a large array in contract code increases Wasm size",
-                    None,
-                    "consider using host-managed `Bytes` or persistent storage for large data",
-                );
-            }
-        }
-    }
-
-    fn check_item(&mut self, cx: &LateContext<'tcx>, item: &'tcx Item<'tcx>) {
-        if let ItemKind::Const(..) = item.kind {
-            let ty = cx.tcx.type_of(item.owner_id).instantiate_identity();
-            if let ty::Array(_elem_ty, len) = ty.kind()
-                && let Some(n) = len.try_to_target_usize(cx.tcx)
-                && n > LARGE_ARRAY_THRESHOLD
-            {
-                span_lint_and_help(
-                    cx,
-                    LARGE_CONSTANT_ARRAY,
-                    item.span,
-                    "embedding a large constant array in contract code increases Wasm size",
                     None,
                     "consider using host-managed `Bytes` or persistent storage for large data",
                 );
